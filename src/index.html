@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>タスクバー水槽</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; }
+  body { cursor: move; user-select: none; }
+  #aquarium {
+    display: block; width: 100%; height: 100%;
+    image-rendering: pixelated; image-rendering: crisp-edges;
+  }
+</style>
+</head>
+<body>
+  <canvas id="aquarium"></canvas>
+
+<script>
+(() => {
+  const canvas = document.getElementById('aquarium');
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+
+  const state = {
+    count: 10, speedMul: 1.0,
+    bubbles: true, plants: true, gravel: true, transparent: false,
+    pixel: 3, w: 0, h: 0, lw: 0, lh: 0,
+  };
+
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  const rand=(a,b)=>a+Math.random()*(b-a);
+  const pick=a=>a[Math.floor(Math.random()*a.length)];
+  const norm=m=>{const w=Math.max(...m.map(r=>r.length));return m.map(r=>r.padEnd(w,'.'));};
+
+  const SPECIES = [
+    { name:'goldfish', pal:{'1':'#ff8a3d','2':'#e3601f','3':'#ffd29a','p':'#241008'},
+      map: norm(["................","...2......22....","22.2...2221111..","222...21111111p.","2222.21111111111","22222.2111111111","2222..2111111111","222...221111111.","22.2...2221111..","...2......33....","................"]) },
+    { name:'demekin', pal:{'1':'#3a3a46','2':'#1d1d26','3':'#52525f','e':'#f2f2f2','p':'#000000'},
+      map: norm(["................","...2......22....","22.2...2221111..","222...21111ee1..","2222.2111epp1...","22222.211epp11..","2222..2111ee11..","222...22111111..","22.2...222111...","...2......33....","................"]) },
+    { name:'neon', pal:{'1':'#b6e6f2','2':'#74b4c8','5':'#ff2d55','6':'#23c3ff','p':'#10222a'},
+      map: norm(["...............",".2....2111111..","22..211111111p.","222.6666666611.","2222.111111111.","222.5555555511.","22..211111111..",".2....211111...","..............."]) },
+    { name:'angel', pal:{'1':'#eef3f6','2':'#c2d0da','5':'#3a3a46','p':'#10141a'},
+      map: norm(["....2.....","....2.221.","...22.2115","..222.2115",".2222.211p5","22222.21115","22222.21115",".2222.2115.","..222.215..","...22.21...","....2.2...."]) },
+    { name:'guppy', pal:{'1':'#ffb300','2':'#e08e00','4':'#7c4dff','5':'#ff5e8a','p':'#241008'},
+      map: norm([".............",".45..........","4554.2211111.","45554.11111p1","455554.111111","45554.1111111","4554.2211111.",".45..........","............."]) },
+  ];
+  const TAIL_COLS = 4;
+
+  function resize() {
+    state.w = Math.max(1, Math.round(window.innerWidth));
+    state.h = Math.max(1, Math.round(window.innerHeight));
+    state.lw = Math.ceil(state.w / state.pixel);
+    state.lh = Math.ceil(state.h / state.pixel);
+    canvas.width = state.lw * state.pixel;
+    canvas.height = state.lh * state.pixel;
+    ctx.imageSmoothingEnabled = false;
+    ctx.setTransform(state.pixel, 0, 0, state.pixel, 0, 0);
+    buildPlants(); buildGravel();
+    fishes.forEach(f => { f.y = clamp(f.y, f.h2, state.lh - f.h2); f.y0 = f.y; f.targetY = f.y0; });
+  }
+
+  class Fish {
+    constructor(){ this.reset(true); }
+    reset(initial){
+      this.sp = pick(SPECIES);
+      this.w = this.sp.map[0].length; this.hh = this.sp.map.length; this.h2 = this.hh/2;
+      this.x = initial ? rand(0, state.lw) : (Math.random()<0.5 ? -this.w : state.lw + this.w);
+      this.y = rand(this.h2, Math.max(this.h2, state.lh - this.h2));
+      this.y0 = this.y; this.targetY = this.y0;
+      this.dir = Math.random()<0.5 ? 1 : -1;
+      this.baseSpeed = rand(3, 7);
+      this.phase = Math.random()*Math.PI*2;
+      this.wagF = rand(5, 9); this.bobF = rand(0.5, 1.3); this.bobA = rand(0.6, 1.8);
+      this.turnT = rand(3, 7); this.t = 0;
+    }
+    update(dt){
+      this.t += dt; this.phase += dt*this.wagF;
+      this.x += this.baseSpeed * state.speedMul * dt * this.dir;
+      this.turnT -= dt;
+      if (this.turnT <= 0){
+        this.turnT = rand(3, 7);
+        if (Math.random() < 0.3) this.dir *= -1;
+        this.targetY = clamp(this.targetY + rand(-state.lh*0.3, state.lh*0.3), this.h2, Math.max(this.h2, state.lh - this.h2));
+      }
+      this.y0 += (this.targetY - this.y0) * Math.min(1, dt*0.7);
+      this.y = this.y0 + Math.sin(this.t*this.bobF) * this.bobA;
+      this.y = clamp(this.y, this.h2, Math.max(this.h2, state.lh - this.h2));
+      const m = this.w + 2;
+      if (this.x < -m) this.x = state.lw + m;
+      if (this.x > state.lw + m) this.x = -m;
+    }
+    draw(){
+      const map=this.sp.map, pal=this.sp.pal;
+      const ox=Math.round(this.x-this.w/2), oy=Math.round(this.y-this.hh/2);
+      const wag=Math.sin(this.phase);
+      const ts = wag>0.45?-1:(wag<-0.45?1:0);
+      for (let cy=0;cy<this.hh;cy++){ const row=map[cy];
+        for (let cx=0;cx<this.w;cx++){ const col=pal[row[cx]]; if(!col)continue;
+          const dx=this.dir===1?cx:(this.w-1-cx);
+          let py=oy+cy; if (cx<TAIL_COLS) py+=ts;
+          ctx.fillStyle=col; ctx.fillRect(ox+dx, py, 1, 1);
+        }}
+    }
+  }
+
+  class Bubble {
+    constructor(){ this.reset(); this.y=rand(0,state.lh); }
+    reset(){ this.x=rand(0,state.lw); this.y=state.lh+rand(0,4); this.spd=rand(3,8); this.ph=Math.random()*6.28; this.drift=rand(-2,2); }
+    update(dt){ this.y-=this.spd*dt; this.ph+=dt*2.5; this.x+=Math.sin(this.ph)*this.drift*dt; if(this.y<-2)this.reset(); }
+    draw(){ ctx.fillStyle='rgba(200,240,250,0.65)'; ctx.fillRect(Math.round(this.x),Math.round(this.y),1,1); }
+  }
+
+  let plants=[];
+  function buildPlants(){ plants=[]; const n=Math.max(2,Math.round(state.lw/26));
+    for(let i=0;i<n;i++) plants.push({x:Math.round(rand(state.lw*0.05,state.lw*0.95)),h:rand(state.lh*0.5,state.lh*0.95),ph:Math.random()*6.28,dark:Math.random()<0.5}); }
+  function drawPlant(p,time){ const top=Math.round(state.lh-p.h);
+    for(let y=state.lh-1;y>=top;y--){ const f=(state.lh-1-y)/Math.max(1,p.h);
+      const sway=Math.sin(time*1.4+p.ph+f*3)*f*(state.lh*0.12); const x=Math.round(p.x+sway);
+      ctx.fillStyle=p.dark?'#1f7a52':'#2fae63'; ctx.fillRect(x,y,1,1);
+      if(f>0.25&&(y%2===0)) ctx.fillRect(x+(p.dark?1:-1),y,1,1); } }
+
+  let gravel=[];
+  function buildGravel(){ gravel=[]; const rows=Math.max(1,Math.round(state.lh*0.12));
+    for(let i=0;i<state.lw*1.4;i++) gravel.push({x:Math.floor(rand(0,state.lw)),y:state.lh-1-Math.floor(rand(0,rows)),c:pick(['#5b6b78','#6e7d88','#48565f','#7d8a94','#8a7d6e'])}); }
+  function drawGravel(){ for(const g of gravel){ ctx.fillStyle=g.c; ctx.fillRect(g.x,g.y,1,1);} }
+
+  function drawBackground(){
+    if(state.transparent){ ctx.clearRect(0,0,state.lw,state.lh); return; }
+    const bands=['#236a8c','#1c5a7e','#164a6c','#103a5a','#0c2e49']; const seg=state.lh/bands.length;
+    for(let i=0;i<bands.length;i++){ ctx.fillStyle=bands[i]; ctx.fillRect(0,Math.round(i*seg),state.lw,Math.ceil(seg)+1); }
+  }
+
+  const fishes=[], bubbles=[];
+  function syncFish(){ while(fishes.length<state.count)fishes.push(new Fish()); while(fishes.length>state.count)fishes.pop(); }
+  for(let i=0;i<60;i++) bubbles.push(new Bubble());
+
+  let last=performance.now();
+  function loop(now){
+    let dt=(now-last)/1000; last=now; dt=Math.min(dt,0.05); const time=now/1000;
+    drawBackground();
+    if(state.gravel && !state.transparent) drawGravel();
+    if(state.plants) plants.forEach(p=>drawPlant(p,time));
+    fishes.forEach(f=>{f.update(dt);f.draw();});
+    if(state.bubbles) bubbles.forEach(b=>{b.update(dt);b.draw();});
+    requestAnimationFrame(loop);
+  }
+
+  function applySettings(s){
+    if(!s) return;
+    if(typeof s.count==='number'){ state.count=s.count; syncFish(); }
+    if(typeof s.speed==='number') state.speedMul=s.speed;
+    if(typeof s.transparent==='boolean') state.transparent=s.transparent;
+    if(typeof s.bubbles==='boolean') state.bubbles=s.bubbles;
+    if(typeof s.plants==='boolean') state.plants=s.plants;
+    if(typeof s.gravel==='boolean') state.gravel=s.gravel;
+    if(typeof s.pixel==='number' && s.pixel!==state.pixel){ state.pixel=s.pixel; resize(); }
+  }
+
+  // ===== Tauri ドラッグ／リサイズ =====
+  const EDGE = 6;
+  const getAppWindow = () => window.__TAURI__ && window.__TAURI__.window.getCurrentWindow();
+  const invoke = (...args) => window.__TAURI__.core.invoke(...args);
+
+  let dragging = false;
+  let lastSX = 0, lastSY = 0;
+
+  window.addEventListener('mousedown', async (e) => {
+    if (e.button !== 0) return;
+    const w = getAppWindow();
+    if (!w) return;
+    e.preventDefault();
+    if (e.clientX < EDGE) {
+      await w.startResizeDragging('West');
+    } else if (e.clientX > window.innerWidth - EDGE) {
+      await w.startResizeDragging('East');
+    } else {
+      dragging = true;
+      lastSX = e.screenX;
+      lastSY = e.screenY;
+    }
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const dx = e.screenX - lastSX;
+    const dy = e.screenY - lastSY;
+    if (dx !== 0 || dy !== 0) {
+      invoke('move_window', { dx, dy });
+      lastSX = e.screenX;
+      lastSY = e.screenY;
+    }
+  });
+  const endDrag = () => { dragging = false; };
+  window.addEventListener('mouseup', endDrag);
+  window.addEventListener('mouseleave', endDrag);
+  window.addEventListener('blur', endDrag);
+
+  // 端ではリサイズカーソル表示
+  window.addEventListener('mousemove', (e) => {
+    if (dragging) return;
+    if (e.clientX < EDGE || e.clientX > window.innerWidth - EDGE) {
+      document.body.style.cursor = 'ew-resize';
+    } else {
+      document.body.style.cursor = 'move';
+    }
+  });
+
+  // 右クリックで Rust 側のコンテキストメニューを表示
+  window.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    invoke('show_context_menu');
+  });
+
+  // ===== Rust 側との設定同期 =====
+  if (window.__TAURI__) {
+    invoke('get_settings').then(s => applySettings(s));
+    window.__TAURI__.event.listen('settings', (e) => applySettings(e.payload));
+  }
+
+  window.addEventListener('resize', resize);
+  resize(); syncFish(); requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
