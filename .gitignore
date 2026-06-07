@@ -12,6 +12,12 @@ dist
 dist-ssr
 *.local
 
+# MSIX 関連の生成物（実行ファイルとパッケージ）
+msix/*.exe
+msix/*.msix
+msix/*.appx
+msix/*.pfx
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -7,6 +7,7 @@
     "tauri": "tauri"
   },
   "devDependencies": {
+    "@microsoft/winappcli": "^0.3.2",
     "@tauri-apps/cli": "^2"
   }
 }
